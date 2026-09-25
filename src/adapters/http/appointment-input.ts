@@ -59,7 +59,6 @@ export function validateCreateAppointment(
   idempotencyKey?: unknown,
 ): ValidationResult<ValidatedCreateAppointment> {
   const request = createAppointmentSchema.safeParse(body);
-  // Un cuerpo que no es objeto se rechazaba antes de revisar la cabecera.
   if (!request.success && request.error.issues.some((issue) => issue.code === 'invalid_type' && issue.path.length === 0)) {
     return { ok: false, issues: bodyIssues(request.error) };
   }
