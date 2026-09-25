@@ -112,16 +112,16 @@ export function createAppointmentHttpHandler(actions?: AppointmentHttpActions) {
         if (error instanceof IdempotencyConflictError) {
           return json(409, {
             error: {
-              code: 'IDEMPOTENCY_CONFLICT',
-              message: error.message,
+              code: 'REQUEST_CONFLICT',
+              message: 'No se pudo procesar la solicitud por un conflicto.',
             },
           });
         }
         if (error instanceof AppointmentDispatchError) {
           return json(503, {
             error: {
-              code: 'DISPATCH_UNAVAILABLE',
-              message: error.message,
+              code: 'SERVICE_UNAVAILABLE',
+              message: 'No fue posible confirmar el procesamiento. Consulta el estado antes de reintentar.',
               appointmentId: error.appointmentId,
             },
           });

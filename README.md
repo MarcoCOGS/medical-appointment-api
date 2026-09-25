@@ -28,7 +28,18 @@ El dominio (`src/domain`) define las citas y sus estados. Los casos de uso y pue
 
 Se usa el **patrón Repository**: los casos de uso dependen de los puertos `AppointmentRepository` y `CountryAppointmentRepository`; los adaptadores de DynamoDB y MySQL aportan sus implementaciones. Las dependencias se inyectan desde los handlers. El mismo caso de uso de registro sirve a PE y CL, cada uno con su base y usuario MySQL.
 
-Las entregas repetidas de mensajes conservan `appointmentId`. DynamoDB utiliza escrituras y cambios de estado condicionales; MySQL impone unicidad en `appointment_id` y `schedule_id`. Si otro asegurado ocupa el espacio, la solicitud termina en `rejected`. El modelo de DynamoDB se detalla en [docs/dynamodb.md](docs/dynamodb.md).
+Las entregas repetidas de mensajes conservan `appointmentId`. DynamoDB utiliza escrituras y cambios de estado condicionales; MySQL impone unicidad en `appointment_id` y `schedule_id`. Si otro asegurado ocupa el espacio, la solicitud termina en `rejected`.
+
+El modelo de DynamoDB se detalla a continuación:
+
+| Registro | PK | SK | Datos |
+| --- | --- | --- | --- |
+| Cita | `INSURED#insuredId` | `APPOINTMENT#appointmentId` | Solicitud, estado y fechas |
+| Idempotencia | `IDEMPOTENCY#SHA-256(clave)` | `REQUEST` | Huella del cuerpo y referencia a la cita |
+
+La tabla usa capacidad bajo demanda. `GET /appointments/{insuredId}` consulta la partición del asegurado con `Query` consistente y paginada, y devuelve las citas por `createdAt` descendente.
+
+Con `Idempotency-Key`, una transacción crea ambos registros. Repetir la clave con el mismo cuerpo recupera la cita existente; usarla con otro cuerpo produce `409 REQUEST_CONFLICT`. La clave original no se guarda. `publishedAt` registra el envío a SNS y no aparece en la API.
 
 ## Requisitos
 
@@ -37,7 +48,7 @@ Las entregas repetidas de mensajes conservan `appointmentId`. DynamoDB utiliza e
 - Cuenta AWS con permisos para desplegar el servicio mediante CloudFormation, incluidos IAM, Lambda, API Gateway, DynamoDB, SNS, SQS, EventBridge, S3 y recursos de VPC. La identidad que despliega debe poder leer los dos secretos de aplicación (`secretsmanager:GetSecretValue`).
 - Una instancia RDS MySQL existente en `us-east-1`, en la misma VPC que las Lambdas de país, con las bases `appointment_pe` y `appointment_cl`. RDS **no** se crea con Serverless Framework.
 
-[db/README.md](db/README.md) explica la creación de RDS, las migraciones, los catálogos ficticios, los horarios y los permisos mínimos de `app_pe` y `app_cl`. Cada base contiene centros, especialidades, médicos y espacios de 30 minutos. `appointments.schedule_id` es único dentro de cada base.
+Para preparar una instancia RDS MySQL, ejecutar [000_create_databases.sql](db/migrations/000_create_databases.sql) como administrador. En cada base creada, ejecutar [001_create_schema.sql](db/migrations/001_create_schema.sql), la carga de catálogo correspondiente ([PE](db/migrations/002_seed_catalog_pe.sql) o [CL](db/migrations/002_seed_catalog_cl.sql)) y [refresh_demo_slots.sql](db/seeds/refresh_demo_slots.sql). Cada base contiene centros, especialidades, médicos y horarios de 30 minutos. Los usuarios `app_pe` y `app_cl` requieren `SELECT, INSERT` en sus respectivas tablas `appointments` y `SELECT` en `schedule_slots`; `appointments.schedule_id` es único dentro de cada base.
 
 ## Configuración local
 
@@ -78,9 +89,11 @@ Cuando la configuración y el paquete estén revisados, el propietario de la cue
 pnpm exec serverless deploy
 ```
 
-El servicio usa la región `us-east-1` y el stage `dev`. Guardar la URL HTTP API que muestre el despliegue; esa URL será la base de los ejemplos siguientes y se añadirá a la sección `servers` de OpenAPI después de probarla. No se necesita crear manualmente DynamoDB, SNS, SQS, EventBridge ni las Lambdas.
+El servicio usa la región `us-east-1` y el stage `dev`. La API desplegada y probada está disponible en [https://6if1ph23tc.execute-api.us-east-1.amazonaws.com](https://6if1ph23tc.execute-api.us-east-1.amazonaws.com). No se necesita crear manualmente DynamoDB, SNS, SQS, EventBridge ni las Lambdas.
 
 ## Uso de la API
+
+API Gateway aplica un objetivo de **5 solicitudes por segundo por ruta** (POST y GET), con ráfaga de 5. La capacidad objetivo combinada es 10 solicitudes por segundo cuando ambas rutas reciben tráfico; el límite no es un contador global exacto. Las solicitudes excedentes pueden recibir `429 Too Many Requests` y deben reintentarse más tarde.
 
 La carga inicial de demostración de esta entrega creó **840 horarios por país**, con `scheduleId` del `1` al `840` en cada base. Los IDs de PE y CL son independientes. Para probar la API sin acceso a MySQL, usa uno de estos horarios de ejemplo:
 
@@ -89,12 +102,12 @@ La carga inicial de demostración de esta entrega creó **840 horarios por país
 | PE | `1`, `3`, `5`, `7`, `9` |
 | CL | `2`, `4`, `6`, `8`, `10` |
 
-Cada horario admite **una sola cita por país**. Si otro usuario ya tomó un ID, el `GET` mostrará `rejected` con motivo `SLOT_UNAVAILABLE`; prueba otro ID de la tabla con una **nueva** `Idempotency-Key`.
+Cada horario admite **una sola cita por país**. Si un horario no existe o ya está ocupado, el `GET` mostrará `rejected`, `rejectionReason: "SLOT_UNAVAILABLE"` y `rejectionMessage: "El horario solicitado no está disponible."`. Prueba otro ID de la tabla con una **nueva** `Idempotency-Key`.
 
 Usar exactamente la URL entregada por Serverless, sin agregar una ruta de stage por cuenta propia:
 
 ```sh
-API_URL='https://URL_ENTREGADA_POR_SERVERLESS'
+API_URL='https://6if1ph23tc.execute-api.us-east-1.amazonaws.com'
 
 curl -i -X POST "$API_URL/appointments" \
   -H 'Content-Type: application/json' \
@@ -113,9 +126,16 @@ curl -i "$API_URL/appointments/00456"
 
 El `insuredId` es texto de **exactamente cinco dígitos** y conserva los ceros iniciales.
 
-Una solicitud nueva responde `202 Accepted` con `appointmentId`, `status: "pending"` y un mensaje de procesamiento. `GET /appointments/{insuredId}` devuelve las solicitudes del asegurado, ordenadas por `createdAt` descendente; puede mostrar `pending` hasta que llegue la confirmación. Repetir el mismo POST con la misma `Idempotency-Key` devuelve la cita existente con `200`; reutilizar esa clave para otro cuerpo devuelve `409`.
+Una solicitud nueva responde `202 Accepted` con `appointmentId` y `status: "pending"`. `GET /appointments/{insuredId}` devuelve las solicitudes del asegurado, ordenadas por `createdAt` descendente; puede mostrar `pending` hasta que llegue la confirmación.
 
-Si POST responde `503` con `DISPATCH_UNAVAILABLE`, la solicitud ya fue guardada. Si se proporcionó `Idempotency-Key`, reintentar con la misma clave recupera el mismo `appointmentId`. Sin esa clave, otro POST puede crear una solicitud adicional. El contrato completo y los ejemplos de errores están en [docs/openapi.yaml](docs/openapi.yaml).
+| Caso | Respuesta pública | Significado |
+| --- | --- | --- |
+| Repetir el POST con la misma `Idempotency-Key` y el mismo cuerpo | `200`, con el mismo `appointmentId` | Recupera la solicitud existente sin crear otra cita. |
+| Reutilizar esa clave con un cuerpo distinto | `409 REQUEST_CONFLICT`: «No se pudo procesar la solicitud por un conflicto.» | La clave ya corresponde a otra solicitud; no indica que el horario esté ocupado. |
+| No se pudo confirmar el envío para procesamiento | `503 SERVICE_UNAVAILABLE`: «No fue posible confirmar el procesamiento. Consulta el estado antes de reintentar.» | La solicitud ya se guardó; la respuesta incluye su `appointmentId`. |
+| Horario inexistente u ocupado | GET `200` con cita `rejected`, `rejectionReason: "SLOT_UNAVAILABLE"` y `rejectionMessage: "El horario solicitado no está disponible."` | Ambas causas se presentan igual en la API; internamente se distinguen. |
+
+Si se recibe `503`, consulta primero las citas del asegurado. Si proporcionaste `Idempotency-Key`, reintenta el mismo POST con esa misma clave para recuperar el mismo `appointmentId`. Sin clave, otro POST puede crear una solicitud adicional. Los errores públicos son genéricos; la lógica interna conserva el motivo exacto para procesar reintentos. El contrato completo está en [OpenAPI](docs/openapi.yaml).
 
 ## Comprobación del flujo desplegado
 

@@ -13,7 +13,6 @@
 *.p12
 *.pfx
 
-/.serena/
 /.idea/
 /.vscode/
 .DS_Store

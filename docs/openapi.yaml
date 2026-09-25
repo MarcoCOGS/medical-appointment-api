@@ -3,6 +3,8 @@ info:
   title: Medical Appointment API
   version: 1.0.0
   description: Solicitudes de citas médicas en Perú y Chile con procesamiento asíncrono.
+servers:
+  - url: https://6if1ph23tc.execute-api.us-east-1.amazonaws.com
 paths:
   /appointments:
     post:
@@ -54,13 +56,13 @@ paths:
                   code: VALIDATION_ERROR
                   message: La solicitud contiene datos inválidos.
         '409':
-          description: Idempotency-Key ya utilizada para otra solicitud.
+          description: Conflicto al procesar la solicitud.
           content:
             application/json:
               example:
                 error:
-                  code: IDEMPOTENCY_CONFLICT
-                  message: La clave de idempotencia ya pertenece a otra solicitud.
+                  code: REQUEST_CONFLICT
+                  message: No se pudo procesar la solicitud por un conflicto.
         '503':
           description: Solicitud guardada, pero no se confirmó su envío. Reintenta con la misma Idempotency-Key
             para conservar el appointmentId.
@@ -68,8 +70,8 @@ paths:
             application/json:
               example:
                 error:
-                  code: DISPATCH_UNAVAILABLE
-                  message: La solicitud se registró, pero no se pudo confirmar su envío para procesamiento.
+                  code: SERVICE_UNAVAILABLE
+                  message: No fue posible confirmar el procesamiento. Consulta el estado antes de reintentar.
                   appointmentId: 89f6248e-dbd8-42e0-b9a8-fd69107f75a8
   /appointments/{insuredId}:
     get:
@@ -85,7 +87,7 @@ paths:
         example: '00123'
       responses:
         '200':
-          description: Solicitudes del asegurado; appointments está vacío si no hay citas.
+          description: Solicitudes del asegurado; appointments está vacío si no hay citas. Una cita rechazada incluye rejectionReason SLOT_UNAVAILABLE y rejectionMessage.
           content:
             application/json:
               example:

@@ -106,7 +106,10 @@ describe('handler HTTP de appointment', () => {
       post(JSON.stringify(request), { headers: { 'idempotency-key': 'request-001' } }),
     );
     assert.equal(response.statusCode, 409);
-    assert.equal(JSON.parse(response.body).error.code, 'IDEMPOTENCY_CONFLICT');
+    assert.deepEqual(JSON.parse(response.body).error, {
+      code: 'REQUEST_CONFLICT',
+      message: 'No se pudo procesar la solicitud por un conflicto.',
+    });
   });
 
   it('responde 503 con el appointmentId si se guardó pero falló el envío', async () => {
@@ -117,8 +120,11 @@ describe('handler HTTP de appointment', () => {
     };
     const response = await createAppointmentHttpHandler(actions)(post(JSON.stringify(request)));
     assert.equal(response.statusCode, 503);
-    assert.equal(JSON.parse(response.body).error.code, 'DISPATCH_UNAVAILABLE');
-    assert.equal(JSON.parse(response.body).error.appointmentId, appointment.appointmentId);
+    assert.deepEqual(JSON.parse(response.body).error, {
+      code: 'SERVICE_UNAVAILABLE',
+      message: 'No fue posible confirmar el procesamiento. Consulta el estado antes de reintentar.',
+      appointmentId: appointment.appointmentId,
+    });
   });
 
   it('delega GET válido conservando los ceros iniciales', async () => {

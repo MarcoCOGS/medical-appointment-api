@@ -24,33 +24,10 @@ provider:
   runtime: nodejs24.x
   httpApi:
     payload: '2.0'
-  iam:
-    role:
-      statements:
-        - Effect: Allow
-          Action:
-            - dynamodb:GetItem
-            - dynamodb:PutItem
-            - dynamodb:Query
-            - dynamodb:TransactWriteItems
-            - dynamodb:UpdateItem
-          Resource:
-            Fn::GetAtt: [AppointmentsTable, Arn]
-        - Effect: Allow
-          Action:
-            - sns:Publish
-          Resource:
-            Ref: AppointmentRequestsTopic
-        - Effect: Allow
-          Action:
-            - sqs:ReceiveMessage
-            - sqs:DeleteMessage
-            - sqs:GetQueueAttributes
-          Resource:
-            Fn::GetAtt: [AppointmentConfirmationQueue, Arn]
-
 functions:
   appointment:
+    role:
+      Fn::GetAtt: [AppointmentLambdaRole, Arn]
     handler: src/handlers/appointment-runtime.main
     environment:
       APPOINTMENTS_TABLE:
@@ -117,7 +94,50 @@ functions:
           maximumConcurrency: 2
 
 resources:
+  extensions:
+    HttpApiStage:
+      Properties:
+        DefaultRouteSettings:
+          ThrottlingRateLimit: 5
+          ThrottlingBurstLimit: 5
   Resources:
+    AppointmentLambdaRole:
+      Type: AWS::IAM::Role
+      Properties:
+        AssumeRolePolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Principal:
+                Service: lambda.amazonaws.com
+              Action: sts:AssumeRole
+        ManagedPolicyArns:
+          - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        Policies:
+          - PolicyName: access-appointments
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - Effect: Allow
+                  Action:
+                    - dynamodb:GetItem
+                    - dynamodb:PutItem
+                    - dynamodb:Query
+                    - dynamodb:TransactWriteItems
+                    - dynamodb:UpdateItem
+                  Resource:
+                    Fn::GetAtt: [AppointmentsTable, Arn]
+                - Effect: Allow
+                  Action: sns:Publish
+                  Resource:
+                    Ref: AppointmentRequestsTopic
+                - Effect: Allow
+                  Action:
+                    - sqs:ReceiveMessage
+                    - sqs:DeleteMessage
+                    - sqs:GetQueueAttributes
+                  Resource:
+                    Fn::GetAtt: [AppointmentConfirmationQueue, Arn]
     AppointmentCountryLambdaSecurityGroup:
       Type: AWS::EC2::SecurityGroup
       Properties:

@@ -33,4 +33,38 @@ describe('ListAppointments', () => {
       }],
     });
   });
+
+  it('presenta igual los horarios inexistentes y ocupados sin revelar el motivo interno', async () => {
+    const common = {
+      ...request,
+      status: 'rejected' as const,
+      createdAt: '2026-09-24T15:00:00.000Z',
+    };
+    const repository: AppointmentRepository = {
+      async createPending(appointment) { return { kind: 'created', appointment }; },
+      async markPublished() {},
+      async listByInsuredId() {
+        return [
+          { ...common, appointmentId: 'not-found', rejectionReason: 'SLOT_NOT_FOUND' },
+          { ...common, appointmentId: 'occupied', rejectionReason: 'SLOT_UNAVAILABLE' },
+        ];
+      },
+    };
+
+    const result = await new ListAppointments(repository).execute('00123');
+    assert.deepEqual(result.appointments, [
+      {
+        ...common,
+        appointmentId: 'not-found',
+        rejectionReason: 'SLOT_UNAVAILABLE',
+        rejectionMessage: 'El horario solicitado no está disponible.',
+      },
+      {
+        ...common,
+        appointmentId: 'occupied',
+        rejectionReason: 'SLOT_UNAVAILABLE',
+        rejectionMessage: 'El horario solicitado no está disponible.',
+      },
+    ]);
+  });
 });

@@ -1,4 +1,4 @@
-import type { Appointment, AppointmentStatus, CountryISO, RejectionReason } from '../../domain/appointment.js';
+import type { Appointment, AppointmentStatus, CountryISO } from '../../domain/appointment.js';
 
 export interface AppointmentSummary {
   appointmentId: string;
@@ -7,7 +7,8 @@ export interface AppointmentSummary {
   countryISO: CountryISO;
   status: AppointmentStatus;
   createdAt: string;
-  rejectionReason?: RejectionReason;
+  rejectionReason?: 'SLOT_UNAVAILABLE';
+  rejectionMessage?: string;
 }
 
 export interface ListAppointmentsResult {
@@ -25,6 +26,9 @@ export function toAppointmentSummary(appointment: Appointment): AppointmentSumma
     createdAt: appointment.createdAt,
     ...(appointment.rejectionReason === undefined
       ? {}
-      : { rejectionReason: appointment.rejectionReason }),
+      : {
+        rejectionReason: 'SLOT_UNAVAILABLE' as const,
+        rejectionMessage: 'El horario solicitado no está disponible.',
+      }),
   };
 }
