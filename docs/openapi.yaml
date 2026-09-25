@@ -1,0 +1,107 @@
+openapi: 3.0.3
+info:
+  title: Medical Appointment API
+  version: 1.0.0
+  description: Solicitudes de citas médicas en Perú y Chile con procesamiento asíncrono.
+paths:
+  /appointments:
+    post:
+      summary: Solicitar una cita médica
+      description: La respuesta 202 indica que la solicitud está en proceso. Consulta su estado con GET.
+      parameters:
+      - name: Idempotency-Key
+        in: header
+        required: false
+        description: Clave opcional para reintentos. La misma clave con otro cuerpo devuelve 409.
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: ^[!-~]+$
+        example: request-001
+      requestBody:
+        required: true
+        content:
+          application/json:
+            example:
+              insuredId: '00123'
+              scheduleId: 1
+              countryISO: PE
+      responses:
+        '202':
+          description: Solicitud recibida y pendiente de procesamiento.
+          content:
+            application/json:
+              example:
+                appointmentId: 89f6248e-dbd8-42e0-b9a8-fd69107f75a8
+                insuredId: '00123'
+                scheduleId: 1
+                countryISO: PE
+                status: pending
+                createdAt: '2026-09-24T15:00:00.000Z'
+                message: El agendamiento está en proceso.
+        '200':
+          description: Reintento de la misma solicitud con Idempotency-Key; devuelve la cita existente. Tiene el
+            mismo formato que la respuesta 202.
+          content:
+            application/json: {}
+        '400':
+          description: JSON inválido o campos incorrectos (INVALID_JSON / VALIDATION_ERROR).
+          content:
+            application/json:
+              example:
+                error:
+                  code: VALIDATION_ERROR
+                  message: La solicitud contiene datos inválidos.
+        '409':
+          description: Idempotency-Key ya utilizada para otra solicitud.
+          content:
+            application/json:
+              example:
+                error:
+                  code: IDEMPOTENCY_CONFLICT
+                  message: La clave de idempotencia ya pertenece a otra solicitud.
+        '503':
+          description: Solicitud guardada, pero no se confirmó su envío. Reintenta con la misma Idempotency-Key
+            para conservar el appointmentId.
+          content:
+            application/json:
+              example:
+                error:
+                  code: DISPATCH_UNAVAILABLE
+                  message: La solicitud se registró, pero no se pudo confirmar su envío para procesamiento.
+                  appointmentId: 89f6248e-dbd8-42e0-b9a8-fd69107f75a8
+  /appointments/{insuredId}:
+    get:
+      summary: Consultar las citas de un asegurado
+      description: Una cita puede seguir en pending mientras se procesa.
+      parameters:
+      - name: insuredId
+        in: path
+        required: true
+        schema:
+          type: string
+          pattern: ^[0-9]{5}$
+        example: '00123'
+      responses:
+        '200':
+          description: Solicitudes del asegurado; appointments está vacío si no hay citas.
+          content:
+            application/json:
+              example:
+                insuredId: '00123'
+                appointments:
+                - appointmentId: 89f6248e-dbd8-42e0-b9a8-fd69107f75a8
+                  insuredId: '00123'
+                  scheduleId: 1
+                  countryISO: PE
+                  status: completed
+                  createdAt: '2026-09-24T15:00:00.000Z'
+        '400':
+          description: insuredId debe tener exactamente cinco dígitos.
+          content:
+            application/json:
+              example:
+                error:
+                  code: VALIDATION_ERROR
+                  message: La solicitud contiene datos inválidos.

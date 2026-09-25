@@ -1,0 +1,5 @@
+CREATE DATABASE IF NOT EXISTS appointment_pe
+  CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
+
+CREATE DATABASE IF NOT EXISTS appointment_cl
+  CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;

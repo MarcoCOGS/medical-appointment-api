@@ -1,0 +1,37 @@
+{
+  "name": "medical-appointment-api",
+  "version": "1.0.0",
+  "description": "",
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "node -e \"require('node:fs').rmSync('.build', { recursive: true, force: true })\" && tsc --noEmit false --outDir .build && node --test .build/tests/*.test.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "UNLICENSED",
+  "devEngines": {
+    "packageManager": {
+      "name": "pnpm",
+      "version": "12.6.0",
+      "onFail": "download"
+    }
+  },
+  "packageManager": "pnpm@12.6.0",
+  "type": "module",
+  "devDependencies": {
+    "@types/node": "^24.13.6",
+    "serverless": "^4.42.0",
+    "typescript": "^7.0.2"
+  },
+  "private": true,
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.1139.0",
+    "@aws-sdk/client-eventbridge": "^3.1139.0",
+    "@aws-sdk/client-sns": "^3.1139.0",
+    "@aws-sdk/lib-dynamodb": "^3.1139.0",
+    "mysql2": "^3.24.4"
+  }
+}

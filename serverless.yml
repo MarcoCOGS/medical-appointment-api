@@ -1,0 +1,348 @@
+service: medical-appointment-api
+frameworkVersion: '4'
+
+build:
+  esbuild:
+    external:
+      - mysql2
+
+package:
+  patterns:
+    - certs/rds-us-east-1-ca.crt
+    - '!global-bundle.pem'
+
+custom:
+  network:
+    vpcId: ${env:VPC_ID}
+    subnetId: ${env:SUBNET_ID}
+    rdsSecurityGroupId: ${env:RDS_SECURITY_GROUP_ID}
+
+provider:
+  name: aws
+  region: us-east-1
+  stage: dev
+  runtime: nodejs24.x
+  httpApi:
+    payload: '2.0'
+  iam:
+    role:
+      statements:
+        - Effect: Allow
+          Action:
+            - dynamodb:GetItem
+            - dynamodb:PutItem
+            - dynamodb:Query
+            - dynamodb:TransactWriteItems
+            - dynamodb:UpdateItem
+          Resource:
+            Fn::GetAtt: [AppointmentsTable, Arn]
+        - Effect: Allow
+          Action:
+            - sns:Publish
+          Resource:
+            Ref: AppointmentRequestsTopic
+        - Effect: Allow
+          Action:
+            - sqs:ReceiveMessage
+            - sqs:DeleteMessage
+            - sqs:GetQueueAttributes
+          Resource:
+            Fn::GetAtt: [AppointmentConfirmationQueue, Arn]
+
+functions:
+  appointment:
+    handler: src/handlers/appointment-runtime.main
+    environment:
+      APPOINTMENTS_TABLE:
+        Ref: AppointmentsTable
+      APPOINTMENT_REQUESTS_TOPIC_ARN:
+        Ref: AppointmentRequestsTopic
+    events:
+      - httpApi:
+          method: POST
+          path: /appointments
+      - httpApi:
+          method: GET
+          path: /appointments/{insuredId}
+      - sqs:
+          arn:
+            Fn::GetAtt: [AppointmentConfirmationQueue, Arn]
+          batchSize: 1
+          maximumConcurrency: 2
+  appointment_pe:
+    role:
+      Fn::GetAtt: [AppointmentPeLambdaRole, Arn]
+    vpc:
+      securityGroupIds:
+        - Ref: AppointmentCountryLambdaSecurityGroup
+      subnetIds:
+        - ${self:custom.network.subnetId}
+    environment:
+      APPOINTMENT_EVENTS_BUS_ARN:
+        Fn::GetAtt: [AppointmentEventsBus, Arn]
+      MYSQL_HOST: ${env:RDS_HOST}
+      MYSQL_USER: ${env:MYSQL_USER_PE}
+      MYSQL_PASSWORD: '{{resolve:secretsmanager:medical-appointment-api/${sls:stage}/mysql/app-pe:SecretString:password}}'
+      MYSQL_CA_PATH: /var/task/certs/rds-us-east-1-ca.crt
+    handler: src/handlers/appointment-pe.main
+    timeout: 30
+    events:
+      - sqs:
+          arn:
+            Fn::GetAtt: [SqsPeQueue, Arn]
+          batchSize: 1
+          maximumConcurrency: 2
+  appointment_cl:
+    role:
+      Fn::GetAtt: [AppointmentClLambdaRole, Arn]
+    vpc:
+      securityGroupIds:
+        - Ref: AppointmentCountryLambdaSecurityGroup
+      subnetIds:
+        - ${self:custom.network.subnetId}
+    environment:
+      APPOINTMENT_EVENTS_BUS_ARN:
+        Fn::GetAtt: [AppointmentEventsBus, Arn]
+      MYSQL_HOST: ${env:RDS_HOST}
+      MYSQL_USER: ${env:MYSQL_USER_CL}
+      MYSQL_PASSWORD: '{{resolve:secretsmanager:medical-appointment-api/${sls:stage}/mysql/app-cl:SecretString:password}}'
+      MYSQL_CA_PATH: /var/task/certs/rds-us-east-1-ca.crt
+    handler: src/handlers/appointment-cl.main
+    timeout: 30
+    events:
+      - sqs:
+          arn:
+            Fn::GetAtt: [SqsClQueue, Arn]
+          batchSize: 1
+          maximumConcurrency: 2
+
+resources:
+  Resources:
+    AppointmentCountryLambdaSecurityGroup:
+      Type: AWS::EC2::SecurityGroup
+      Properties:
+        GroupDescription: Outbound access for country appointment Lambdas
+        VpcId: ${self:custom.network.vpcId}
+    AppointmentRdsIngressFromLambdas:
+      Type: AWS::EC2::SecurityGroupIngress
+      Properties:
+        GroupId: ${self:custom.network.rdsSecurityGroupId}
+        IpProtocol: tcp
+        FromPort: 3306
+        ToPort: 3306
+        SourceSecurityGroupId:
+          Ref: AppointmentCountryLambdaSecurityGroup
+    AppointmentEventBridgeEndpointSecurityGroup:
+      Type: AWS::EC2::SecurityGroup
+      Properties:
+        GroupDescription: EventBridge HTTPS from country appointment Lambdas
+        VpcId: ${self:custom.network.vpcId}
+        SecurityGroupIngress:
+          - IpProtocol: tcp
+            FromPort: 443
+            ToPort: 443
+            SourceSecurityGroupId:
+              Ref: AppointmentCountryLambdaSecurityGroup
+    AppointmentEventBridgeEndpoint:
+      Type: AWS::EC2::VPCEndpoint
+      Properties:
+        VpcEndpointType: Interface
+        VpcId: ${self:custom.network.vpcId}
+        ServiceName:
+          Fn::Sub: 'com.amazonaws.${AWS::Region}.events'
+        PrivateDnsEnabled: true
+        SubnetIds:
+          - ${self:custom.network.subnetId}
+        SecurityGroupIds:
+          - Ref: AppointmentEventBridgeEndpointSecurityGroup
+    AppointmentPeLambdaRole:
+      Type: AWS::IAM::Role
+      Properties:
+        AssumeRolePolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Principal:
+                Service: lambda.amazonaws.com
+              Action: sts:AssumeRole
+        ManagedPolicyArns:
+          - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+          - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+        Policies:
+          - PolicyName: consume-pe-appointments
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - Effect: Allow
+                  Action:
+                    - sqs:ReceiveMessage
+                    - sqs:DeleteMessage
+                    - sqs:GetQueueAttributes
+                  Resource:
+                    Fn::GetAtt: [SqsPeQueue, Arn]
+                - Effect: Allow
+                  Action: events:PutEvents
+                  Resource:
+                    Fn::GetAtt: [AppointmentEventsBus, Arn]
+    AppointmentClLambdaRole:
+      Type: AWS::IAM::Role
+      Properties:
+        AssumeRolePolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Principal:
+                Service: lambda.amazonaws.com
+              Action: sts:AssumeRole
+        ManagedPolicyArns:
+          - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+          - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+        Policies:
+          - PolicyName: consume-cl-appointments
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - Effect: Allow
+                  Action:
+                    - sqs:ReceiveMessage
+                    - sqs:DeleteMessage
+                    - sqs:GetQueueAttributes
+                  Resource:
+                    Fn::GetAtt: [SqsClQueue, Arn]
+                - Effect: Allow
+                  Action: events:PutEvents
+                  Resource:
+                    Fn::GetAtt: [AppointmentEventsBus, Arn]
+    AppointmentEventsBus:
+      Type: AWS::Events::EventBus
+      Properties:
+        Name: ${self:service}-${sls:stage}-events
+    AppointmentConfirmationQueue:
+      Type: AWS::SQS::Queue
+      Properties:
+        QueueName: ${self:service}-${sls:stage}-appointment-confirmations
+        VisibilityTimeout: 180
+    AppointmentProcessedRule:
+      Type: AWS::Events::Rule
+      Properties:
+        Name: ${self:service}-${sls:stage}-appointment-processed
+        EventBusName:
+          Ref: AppointmentEventsBus
+        EventPattern:
+          source:
+            - medical.appointments
+          detail-type:
+            - AppointmentProcessed
+        Targets:
+          - Id: AppointmentConfirmationQueue
+            Arn:
+              Fn::GetAtt: [AppointmentConfirmationQueue, Arn]
+    AppointmentConfirmationQueuePolicy:
+      Type: AWS::SQS::QueuePolicy
+      Properties:
+        Queues:
+          - Ref: AppointmentConfirmationQueue
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Principal:
+                Service: events.amazonaws.com
+              Action: sqs:SendMessage
+              Resource:
+                Fn::GetAtt: [AppointmentConfirmationQueue, Arn]
+              Condition:
+                ArnEquals:
+                  'aws:SourceArn':
+                    Fn::GetAtt: [AppointmentProcessedRule, Arn]
+    AppointmentRequestsTopic:
+      Type: AWS::SNS::Topic
+      Properties:
+        TopicName: ${self:service}-${sls:stage}-appointment-requests
+    SqsPeQueue:
+      Type: AWS::SQS::Queue
+      Properties:
+        QueueName: ${self:service}-${sls:stage}-SQS_PE
+        VisibilityTimeout: 180
+    SqsClQueue:
+      Type: AWS::SQS::Queue
+      Properties:
+        QueueName: ${self:service}-${sls:stage}-SQS_CL
+        VisibilityTimeout: 180
+    SqsPeQueuePolicy:
+      Type: AWS::SQS::QueuePolicy
+      Properties:
+        Queues:
+          - Ref: SqsPeQueue
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Principal:
+                Service: sns.amazonaws.com
+              Action: sqs:SendMessage
+              Resource:
+                Fn::GetAtt: [SqsPeQueue, Arn]
+              Condition:
+                ArnEquals:
+                  'aws:SourceArn':
+                    Ref: AppointmentRequestsTopic
+    SqsClQueuePolicy:
+      Type: AWS::SQS::QueuePolicy
+      Properties:
+        Queues:
+          - Ref: SqsClQueue
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Principal:
+                Service: sns.amazonaws.com
+              Action: sqs:SendMessage
+              Resource:
+                Fn::GetAtt: [SqsClQueue, Arn]
+              Condition:
+                ArnEquals:
+                  'aws:SourceArn':
+                    Ref: AppointmentRequestsTopic
+    SqsPeSubscription:
+      Type: AWS::SNS::Subscription
+      DependsOn: SqsPeQueuePolicy
+      Properties:
+        TopicArn:
+          Ref: AppointmentRequestsTopic
+        Protocol: sqs
+        Endpoint:
+          Fn::GetAtt: [SqsPeQueue, Arn]
+        FilterPolicyScope: MessageAttributes
+        FilterPolicy:
+          countryISO: [PE]
+        RawMessageDelivery: true
+    SqsClSubscription:
+      Type: AWS::SNS::Subscription
+      DependsOn: SqsClQueuePolicy
+      Properties:
+        TopicArn:
+          Ref: AppointmentRequestsTopic
+        Protocol: sqs
+        Endpoint:
+          Fn::GetAtt: [SqsClQueue, Arn]
+        FilterPolicyScope: MessageAttributes
+        FilterPolicy:
+          countryISO: [CL]
+        RawMessageDelivery: true
+    AppointmentsTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:service}-${sls:stage}-appointments
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: PK
+            AttributeType: S
+          - AttributeName: SK
+            AttributeType: S
+        KeySchema:
+          - AttributeName: PK
+            KeyType: HASH
+          - AttributeName: SK
+            KeyType: RANGE
