@@ -104,25 +104,7 @@ La carga inicial de demostración de esta entrega creó **840 horarios por país
 
 Cada horario admite **una sola cita por país**. Si un horario no existe o ya está ocupado, el `GET` mostrará `rejected`, `rejectionReason: "SLOT_UNAVAILABLE"` y `rejectionMessage: "El horario solicitado no está disponible."`. Prueba otro ID de la tabla con una **nueva** `Idempotency-Key`.
 
-Usar exactamente la URL entregada por Serverless, sin agregar una ruta de stage por cuenta propia:
-
-```sh
-API_URL='https://6if1ph23tc.execute-api.us-east-1.amazonaws.com'
-
-curl -i -X POST "$API_URL/appointments" \
-  -H 'Content-Type: application/json' \
-  -H 'Idempotency-Key: ejemplo-pe-001' \
-  -d '{"insuredId":"00123","scheduleId":1,"countryISO":"PE"}'
-
-curl -i "$API_URL/appointments/00123"
-
-curl -i -X POST "$API_URL/appointments" \
-  -H 'Content-Type: application/json' \
-  -H 'Idempotency-Key: ejemplo-cl-001' \
-  -d '{"insuredId":"00456","scheduleId":2,"countryISO":"CL"}'
-
-curl -i "$API_URL/appointments/00456"
-```
+Los comandos reproducibles y las respuestas esperadas están al final, en [Prueba manual con curl](#prueba-manual-con-curl).
 
 El `insuredId` es texto de **exactamente cinco dígitos** y conserva los ceros iniciales.
 
@@ -146,3 +128,82 @@ Si se recibe `503`, consulta primero las citas del asegurado. Si proporcionaste 
 5. Consultar CloudWatch Logs usando `appointmentId` para seguir errores del flujo, sin publicar contraseñas ni datos reales de pacientes.
 
 El repositorio no incluye credenciales AWS, contraseñas MySQL ni datos reales de asegurados.
+
+## Prueba manual con curl
+
+Ejecuta estos comandos en **la misma terminal**. La URL base no lleva `/dev`. `RUN_ID` hace que las claves de esta ejecución sean nuevas; los `insuredId` son ficticios. Los valores de `appointmentId` y `createdAt` cambiarán en cada solicitud.
+
+```sh
+API_URL='https://6if1ph23tc.execute-api.us-east-1.amazonaws.com'
+RUN_ID=$(date +%s)
+PE_KEY="revision-pe-$RUN_ID"
+CL_KEY="revision-cl-$RUN_ID"
+REJECT_KEY="revision-rejected-$RUN_ID"
+```
+
+### 1. Solicitar una cita PE
+
+```sh
+curl -i -X POST "$API_URL/appointments" \
+  -H 'Content-Type: application/json' \
+  -H "Idempotency-Key: $PE_KEY" \
+  -d '{"insuredId":"00123","scheduleId":1,"countryISO":"PE"}'
+```
+
+**Esperado:** HTTP `202`, un `appointmentId` nuevo y `status: "pending"`. Conserva ese `appointmentId` para compararlo con los siguientes resultados.
+
+### 2. Consultar la cita PE
+
+```sh
+curl -i -X GET "$API_URL/appointments/00123"
+```
+
+**Esperado:** HTTP `200`. La cita con el `appointmentId` anterior puede estar primero en `pending`; repite el GET hasta ver `completed`. Si el horario `1` ya fue reservado, verás `rejected` con `rejectionReason: "SLOT_UNAVAILABLE"`: usa otro horario PE sugerido (`3`, `5`, `7` o `9`) y una clave nueva.
+
+### 3. Solicitar y consultar una cita CL
+
+```sh
+curl -i -X POST "$API_URL/appointments" \
+  -H 'Content-Type: application/json' \
+  -H "Idempotency-Key: $CL_KEY" \
+  -d '{"insuredId":"00456","scheduleId":2,"countryISO":"CL"}'
+
+curl -i -X GET "$API_URL/appointments/00456"
+```
+
+**Esperado:** POST `202`; GET `200` con la cita primero en `pending` y después en `completed`. Si el horario `2` ya está ocupado, usa otro horario CL sugerido (`4`, `6`, `8` o `10`) con una clave nueva. Los horarios de PE y CL pertenecen a bases diferentes.
+
+### 4. Repetir el POST de PE con la misma clave y el mismo cuerpo
+
+```sh
+curl -i -X POST "$API_URL/appointments" \
+  -H 'Content-Type: application/json' \
+  -H "Idempotency-Key: $PE_KEY" \
+  -d '{"insuredId":"00123","scheduleId":1,"countryISO":"PE"}'
+```
+
+**Esperado:** HTTP `200`, el **mismo `appointmentId`** del paso 1 y el mensaje `Se recuperó una solicitud existente.`. Si cambiaste de horario en el paso 2, repite aquí el cuerpo que realmente enviaste con `$PE_KEY`.
+
+### 5. Reutilizar la clave de PE con otro cuerpo
+
+```sh
+curl -i -X POST "$API_URL/appointments" \
+  -H 'Content-Type: application/json' \
+  -H "Idempotency-Key: $PE_KEY" \
+  -d '{"insuredId":"00123","scheduleId":3,"countryISO":"PE"}'
+```
+
+**Esperado:** HTTP `409` con `{"error":{"code":"REQUEST_CONFLICT","message":"No se pudo procesar la solicitud por un conflicto."}}`. Esta respuesta significa que la clave ya corresponde a otra solicitud; no reserva el horario `3`.
+
+### 6. Consultar un horario inexistente
+
+```sh
+curl -i -X POST "$API_URL/appointments" \
+  -H 'Content-Type: application/json' \
+  -H "Idempotency-Key: $REJECT_KEY" \
+  -d '{"insuredId":"00999","scheduleId":999999,"countryISO":"PE"}'
+
+curl -i -X GET "$API_URL/appointments/00999"
+```
+
+**Esperado:** POST `202`; después, GET `200` con la cita en `rejected`, `rejectionReason: "SLOT_UNAVAILABLE"` y `rejectionMessage: "El horario solicitado no está disponible."`. Si el GET aún muestra `pending`, repítelo tras unos segundos. El horario inexistente y el ocupado tienen la misma respuesta pública.
