@@ -92,6 +92,11 @@ pnpm exec serverless deploy
 
 El servicio usa la región `us-east-1` y el stage `dev`. La API desplegada y probada está disponible en [https://6if1ph23tc.execute-api.us-east-1.amazonaws.com](https://6if1ph23tc.execute-api.us-east-1.amazonaws.com). No se necesita crear manualmente DynamoDB, SNS, SQS, EventBridge ni las Lambdas.
 
+| Método | URL desplegada |
+| --- | --- |
+| POST | `https://6if1ph23tc.execute-api.us-east-1.amazonaws.com/appointments` |
+| GET | `https://6if1ph23tc.execute-api.us-east-1.amazonaws.com/appointments/{insuredId}` |
+
 ## Uso de la API
 
 API Gateway aplica un objetivo de **5 solicitudes por segundo por ruta** (POST y GET), con ráfaga de 5. La capacidad objetivo combinada es 10 solicitudes por segundo cuando ambas rutas reciben tráfico; el límite no es un contador global exacto. Las solicitudes excedentes pueden recibir `429 Too Many Requests` y deben reintentarse más tarde.
