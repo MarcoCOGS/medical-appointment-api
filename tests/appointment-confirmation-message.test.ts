@@ -69,6 +69,7 @@ describe('parseAppointmentConfirmationMessage', () => {
     assertInvalid(envelope(null), 'detail');
     assertInvalid(JSON.stringify({ source: 'otro', 'detail-type': 'AppointmentProcessed', detail }), 'source');
     assertInvalid(envelope({ ...detail, schemaVersion: 2 }), 'detail.schemaVersion');
+    assertInvalid(envelope({ ...detail, eventType: 'otro', status: 'pending' }), 'detail.eventType');
   });
 
   it('rechaza una identidad o decisión inválida', () => {

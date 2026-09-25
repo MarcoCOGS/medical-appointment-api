@@ -40,6 +40,7 @@ describe('parseAppointmentRequestMessage', () => {
     const body = JSON.stringify({ ...message, countryISO: 'CL' });
     assert.equal(parseAppointmentRequestMessage(body, 'CL').countryISO, 'CL');
     assertInvalid(body, 'PE', 'countryISO');
+    assertInvalid(JSON.stringify({ ...message, countryISO: 'CL', status: 'completed' }), 'PE', 'countryISO');
   });
 
   it('rechaza cuerpos ausentes, JSON inválido y el sobre SNS no configurado como raw', () => {

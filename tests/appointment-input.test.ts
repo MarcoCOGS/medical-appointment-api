@@ -31,6 +31,23 @@ describe('validateCreateAppointment', () => {
     );
   });
 
+  it('conserva la prioridad y el orden de los errores combinados', () => {
+    assert.deepEqual(validateCreateAppointment(null, ''), {
+      ok: false,
+      issues: [{ field: 'body', message: 'Debe ser un objeto JSON.' }],
+    });
+    assert.deepEqual(validateCreateAppointment({
+      insuredId: '00123', scheduleId: 0, countryISO: 'PE', extra: true,
+    }, ''), {
+      ok: false,
+      issues: [
+        { field: 'extra', message: 'Campo no permitido.' },
+        { field: 'scheduleId', message: 'Debe ser un entero positivo seguro.' },
+        { field: 'Idempotency-Key', message: 'Debe tener entre 1 y 128 caracteres ASCII visibles, sin espacios.' },
+      ],
+    });
+  });
+
   it('rechaza entradas inválidas e indica el campo incorrecto', () => {
     const cases: Array<[unknown, unknown, string]> = [
       [null, undefined, 'body'],

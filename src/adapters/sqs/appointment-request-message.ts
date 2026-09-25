@@ -1,7 +1,30 @@
+import { z } from 'zod';
 import type { CountryISO, PendingAppointment } from '../../domain/appointment.js';
+import {
+  appointmentIdSchema,
+  createdAtSchema,
+  firstIssueField,
+  insuredIdSchema,
+  scheduleIdSchema,
+} from '../validation/appointment-schemas.js';
 
-const INSURED_ID_PATTERN = /^[0-9]{5}$/;
-const APPOINTMENT_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+function messageSchema(countryISO: CountryISO) {
+  return z.object({
+    eventType: z.literal('appointment.requested'),
+    schemaVersion: z.literal(1),
+    appointmentId: appointmentIdSchema,
+    insuredId: insuredIdSchema,
+    scheduleId: scheduleIdSchema,
+    countryISO: z.literal(countryISO),
+    status: z.literal('pending'),
+    createdAt: createdAtSchema,
+  });
+}
+
+const requestMessageSchemas = {
+  PE: messageSchema('PE'),
+  CL: messageSchema('CL'),
+};
 
 export class InvalidAppointmentRequestMessageError extends Error {
   constructor(readonly field: string) {
@@ -12,10 +35,6 @@ export class InvalidAppointmentRequestMessageError extends Error {
 
 function invalid(field: string): never {
   throw new InvalidAppointmentRequestMessageError(field);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 export function parseAppointmentRequestMessage(
@@ -31,28 +50,9 @@ export function parseAppointmentRequestMessage(
     invalid('body');
   }
 
-  if (!isRecord(value)) invalid('body');
-  if (value.eventType !== 'appointment.requested') invalid('eventType');
-  if (value.schemaVersion !== 1) invalid('schemaVersion');
-  if (typeof value.appointmentId !== 'string'
-    || !APPOINTMENT_ID_PATTERN.test(value.appointmentId)) invalid('appointmentId');
-  if (typeof value.insuredId !== 'string'
-    || !INSURED_ID_PATTERN.test(value.insuredId)) invalid('insuredId');
-  if (typeof value.scheduleId !== 'number'
-    || !Number.isSafeInteger(value.scheduleId)
-    || value.scheduleId <= 0) invalid('scheduleId');
-  if (value.countryISO !== expectedCountry) invalid('countryISO');
-  if (value.status !== 'pending') invalid('status');
-  if (typeof value.createdAt !== 'string'
-    || !Number.isFinite(Date.parse(value.createdAt))
-    || new Date(value.createdAt).toISOString() !== value.createdAt) invalid('createdAt');
+  const result = requestMessageSchemas[expectedCountry].safeParse(value);
+  if (!result.success) invalid(firstIssueField(result.error));
 
-  return {
-    appointmentId: value.appointmentId,
-    insuredId: value.insuredId,
-    scheduleId: value.scheduleId,
-    countryISO: expectedCountry,
-    status: 'pending',
-    createdAt: value.createdAt,
-  };
+  const { appointmentId, insuredId, scheduleId, countryISO, status, createdAt } = result.data;
+  return { appointmentId, insuredId, scheduleId, countryISO, status, createdAt };
 }

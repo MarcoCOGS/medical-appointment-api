@@ -1,11 +1,35 @@
-import type {
-  CountryAppointmentOutcome,
-  CountryISO,
-  RejectionReason,
-} from '../../domain/appointment.js';
+import { z } from 'zod';
+import type { CountryAppointmentOutcome } from '../../domain/appointment.js';
+import {
+  appointmentIdSchema,
+  countryIsoSchema,
+  createdAtSchema,
+  firstIssueField,
+  insuredIdSchema,
+  scheduleIdSchema,
+} from '../validation/appointment-schemas.js';
 
-const INSURED_ID_PATTERN = /^[0-9]{5}$/;
-const APPOINTMENT_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const detailFields = {
+  eventType: z.literal('appointment.processed'),
+  schemaVersion: z.literal(1),
+  appointmentId: appointmentIdSchema,
+  insuredId: insuredIdSchema,
+  scheduleId: scheduleIdSchema,
+  countryISO: countryIsoSchema,
+  createdAt: createdAtSchema,
+};
+
+const confirmationSchema = z.object({
+  source: z.literal('medical.appointments'),
+  'detail-type': z.literal('AppointmentProcessed'),
+  detail: z.object({
+    ...detailFields,
+    status: z.enum(['completed', 'rejected']),
+    rejectionReason: z.unknown().optional(),
+  }),
+});
+const noRejectionReasonSchema = z.never().optional();
+const rejectionReasonSchema = z.enum(['SLOT_NOT_FOUND', 'SLOT_UNAVAILABLE']);
 
 export class InvalidAppointmentConfirmationMessageError extends Error {
   constructor(readonly field: string) {
@@ -18,57 +42,38 @@ function invalid(field: string): never {
   throw new InvalidAppointmentConfirmationMessageError(field);
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
 export function parseAppointmentConfirmationMessage(
   body: string | undefined,
 ): CountryAppointmentOutcome {
   if (typeof body !== 'string') invalid('body');
-  let envelope: unknown;
+
+  let value: unknown;
   try {
-    envelope = JSON.parse(body);
+    value = JSON.parse(body);
   } catch {
     invalid('body');
   }
-  if (!isRecord(envelope)) invalid('body');
-  if (envelope.source !== 'medical.appointments') invalid('source');
-  if (envelope['detail-type'] !== 'AppointmentProcessed') invalid('detail-type');
-  if (!isRecord(envelope.detail)) invalid('detail');
 
-  const detail = envelope.detail;
-  if (detail.eventType !== 'appointment.processed') invalid('detail.eventType');
-  if (detail.schemaVersion !== 1) invalid('detail.schemaVersion');
-  if (typeof detail.appointmentId !== 'string'
-    || !APPOINTMENT_ID_PATTERN.test(detail.appointmentId)) invalid('detail.appointmentId');
-  if (typeof detail.insuredId !== 'string'
-    || !INSURED_ID_PATTERN.test(detail.insuredId)) invalid('detail.insuredId');
-  if (typeof detail.scheduleId !== 'number'
-    || !Number.isSafeInteger(detail.scheduleId)
-    || detail.scheduleId <= 0) invalid('detail.scheduleId');
-  if (detail.countryISO !== 'PE' && detail.countryISO !== 'CL') invalid('detail.countryISO');
-  if (typeof detail.createdAt !== 'string'
-    || !Number.isFinite(Date.parse(detail.createdAt))
-    || new Date(detail.createdAt).toISOString() !== detail.createdAt) invalid('detail.createdAt');
-  if (detail.status !== 'completed' && detail.status !== 'rejected') invalid('detail.status');
+  const result = confirmationSchema.safeParse(value);
+  if (!result.success) invalid(firstIssueField(result.error));
 
+  const detail = result.data.detail;
   const base = {
     appointmentId: detail.appointmentId,
     insuredId: detail.insuredId,
     scheduleId: detail.scheduleId,
-    countryISO: detail.countryISO as CountryISO,
+    countryISO: detail.countryISO,
     createdAt: detail.createdAt,
   };
+
   if (detail.status === 'completed') {
-    if (detail.rejectionReason !== undefined) invalid('detail.rejectionReason');
+    if (!noRejectionReasonSchema.safeParse(detail.rejectionReason).success) {
+      invalid('detail.rejectionReason');
+    }
     return { ...base, status: 'completed' };
   }
-  if (detail.rejectionReason !== 'SLOT_NOT_FOUND'
-    && detail.rejectionReason !== 'SLOT_UNAVAILABLE') invalid('detail.rejectionReason');
-  return {
-    ...base,
-    status: 'rejected',
-    rejectionReason: detail.rejectionReason as RejectionReason,
-  };
+
+  const reason = rejectionReasonSchema.safeParse(detail.rejectionReason);
+  if (!reason.success) invalid('detail.rejectionReason');
+  return { ...base, status: 'rejected', rejectionReason: reason.data };
 }

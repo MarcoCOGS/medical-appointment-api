@@ -181,6 +181,9 @@ importers:
       mysql2:
         specifier: ^3.24.4
         version: 3.24.4(@types/node@24.13.6)
+      zod:
+        specifier: ^4.6.5
+        version: 4.6.5
     devDependencies:
       '@types/node':
         specifier: ^24.13.6
@@ -503,6 +506,9 @@ packages:
   undici@6.28.1:
     resolution: {integrity: sha512-zWpdTVD54H48CIybL0rWQ3ukpb9d23wM7eH5RtfdmeP70cWHNjtfo7P4vZX+5CoDcO53J4Pu5uXp7lNfjc6DRA==}
     engines: {node: '>=18.17'}
+
+  zod@4.6.5:
+    resolution: {integrity: sha512-v5l/aFXZQeai4awLbOpSoHecE9UiMrnfx75tEXLjNonXVARxQ5mOeipTjROUchszUNCqnE+hqAMujRsRHsut2Q==}
 
 snapshots:
 
@@ -882,3 +888,5 @@ snapshots:
   undici-types@7.18.2: {}
 
   undici@6.28.1: {}
+
+  zod@4.6.5: {}

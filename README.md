@@ -25,6 +25,7 @@ flowchart LR
 ```
 
 El dominio (`src/domain`) define las citas y sus estados. Los casos de uso y puertos (`src/application`) contienen la coordinación del negocio sin depender de AWS ni de MySQL. Los adaptadores (`src/adapters`) implementan HTTP, DynamoDB, SNS, SQS, MySQL y EventBridge. Los handlers (`src/handlers`) conectan las Lambdas con esos casos de uso.
+Los adaptadores de entrada validan el HTTP y los mensajes SQS con Zod; el dominio y los casos de uso no dependen de esta biblioteca.
 
 Se usa el **patrón Repository**: los casos de uso dependen de los puertos `AppointmentRepository` y `CountryAppointmentRepository`; los adaptadores de DynamoDB y MySQL aportan sus implementaciones. Las dependencias se inyectan desde los handlers. El mismo caso de uso de registro sirve a PE y CL, cada uno con su base y usuario MySQL.
 
